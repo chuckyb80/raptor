@@ -806,6 +806,32 @@ class TestE2EEgressProxy(unittest.TestCase):
         self.assertGreaterEqual(len(allowed), 1,
                                 f"expected at least 1 allowed event, got {events}")
 
+    def test_jvm_proxy_sysprops_injected(self):
+        """JVM tools (Maven/Gradle) ignore HTTP(S)_PROXY env — the
+        sandbox must also hand the child JAVA_TOOL_OPTIONS pointing
+        the java.net proxy sysprops at the loopback egress proxy,
+        with empty nonProxyHosts (mirror of NO_PROXY="")."""
+        r = sandbox_run(
+            ["/usr/bin/env"],
+            target="/tmp", output="/tmp",
+            use_egress_proxy=True, proxy_hosts=["example.com"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr[:200])
+        env_lines = dict(
+            line.split("=", 1) for line in r.stdout.splitlines()
+            if "=" in line
+        )
+        https_proxy = env_lines.get("https_proxy", "")
+        self.assertTrue(https_proxy.startswith("http://127.0.0.1:"),
+                        f"https_proxy={https_proxy!r}")
+        port = https_proxy.rsplit(":", 1)[1]
+        jto = env_lines.get("JAVA_TOOL_OPTIONS", "")
+        self.assertIn("-Dhttps.proxyHost=127.0.0.1", jto)
+        self.assertIn(f"-Dhttps.proxyPort={port}", jto)
+        self.assertIn(f"-Dhttp.proxyPort={port}", jto)
+        self.assertIn("-Dhttp.nonProxyHosts=", jto)
+
     def test_env_None_treated_as_default(self):
         """env=None must not inherit os.environ wholesale.
 

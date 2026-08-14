@@ -716,6 +716,22 @@ def sandbox(block_network=_UNSET, target: str = None, output: str = None,
             "HTTPS_PROXY": proxy_url, "https_proxy": proxy_url,
             "HTTP_PROXY": proxy_url, "http_proxy": proxy_url,
             "NO_PROXY": "", "no_proxy": "",
+            # JVM tools (Maven, Gradle, sbt — NOT CodeQL, which reads
+            # lowercase https_proxy itself) ignore proxy env entirely
+            # and need java.net sysprops. JAVA_TOOL_OPTIONS is picked
+            # up by every HotSpot JVM, including Gradle's daemon.
+            # Empty nonProxyHosts mirrors NO_PROXY="" — nothing
+            # bypasses the chokepoint (the JVM default would bypass
+            # localhost/127.*, and direct TCP is blocked anyway).
+            # The JVM prints "Picked up JAVA_TOOL_OPTIONS: ..." on
+            # stderr; harmless, and the value contains no secrets.
+            "JAVA_TOOL_OPTIONS": (
+                f"-Dhttp.proxyHost=127.0.0.1"
+                f" -Dhttp.proxyPort={_effective_proxy_port}"
+                f" -Dhttps.proxyHost=127.0.0.1"
+                f" -Dhttps.proxyPort={_effective_proxy_port}"
+                f" -Dhttp.nonProxyHosts="
+            ),
         }
 
     # Apply profile overrides. CLI flag is authoritative — it wins over
