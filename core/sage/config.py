@@ -27,7 +27,8 @@ def ensure_loopback_no_proxy() -> None:
     """
     if not any(
         os.environ.get(k)
-        for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+        for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                  "http_proxy", "https_proxy", "all_proxy")
     ):
         return
     for var in ("NO_PROXY", "no_proxy"):

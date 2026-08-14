@@ -348,8 +348,8 @@ class RaptorConfig:
 
     # Proxy variables to strip for security
     PROXY_ENV_VARS = [
-        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "no_proxy",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "no_proxy", "all_proxy",
     ]
 
     # ----- Env allowlist (primary) and blocklist (belt + braces) -----

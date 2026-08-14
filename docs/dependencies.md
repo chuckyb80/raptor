@@ -87,3 +87,18 @@ their use case:
 
 Python packages carry their own licences (see the table above). All core
 dependencies are MIT or Apache 2.0.
+
+## Proxied hosts
+
+RAPTOR is proxy-aware end to end on hosts behind a mandatory egress
+proxy: set the conventional `https_proxy` / `http_proxy` (or
+`all_proxy`) and `no_proxy` variables before launching. The sandbox
+egress chokepoint chains upstream through them, JVM children get
+matching `java.net` sysprops injected, `core.http` clients honour them,
+and loopback sidecars (SAGE, Ollama, Joern) are exempted automatically.
+
+Operator-side installs of external tools (joern, AFL++, frida-server,
+jadx) happen outside RAPTOR — export the same proxy variables in the
+installing shell. Note that JVM-based installers (e.g. coursier for
+joern) ignore proxy env vars and need
+`JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>"`.

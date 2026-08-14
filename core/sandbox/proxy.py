@@ -1714,8 +1714,16 @@ def get_proxy(
 
         if _instance is None:
             import os as _os
+            # Fall back through the whole conventional family: an
+            # HTTP_PROXY-only or ALL_PROXY-only host is still a
+            # mandatory-proxy host, and every value here is an HTTP
+            # CONNECT-capable proxy URL usable for our tunnels.
             upstream = (_os.environ.get("HTTPS_PROXY")
-                        or _os.environ.get("https_proxy"))
+                        or _os.environ.get("https_proxy")
+                        or _os.environ.get("ALL_PROXY")
+                        or _os.environ.get("all_proxy")
+                        or _os.environ.get("HTTP_PROXY")
+                        or _os.environ.get("http_proxy"))
             no_proxy = (_os.environ.get("NO_PROXY")
                         or _os.environ.get("no_proxy"))
             # bool(env_var) treats any non-empty string as truthy,

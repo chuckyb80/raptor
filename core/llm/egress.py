@@ -118,8 +118,8 @@ _enabled = False
 # SDK-model config and doesn't cover whatever backend the child CLI
 # resolves for itself (e.g. Bedrock).
 _PROXY_VAR_NAMES = (
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "http_proxy", "https_proxy", "no_proxy",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "no_proxy", "all_proxy",
 )
 _original_proxy_env: "dict[str, str] | None" = None
 
