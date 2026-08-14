@@ -797,9 +797,23 @@ class QueryRunner:
             # subsequent runs; needed once on fresh checkouts before
             # the in-repo queries can resolve their imports.
             try:
+                # Route the first-run dep fetch through the egress
+                # proxy, mirroring the `pack download` site above.
+                # Pre-fix this passed only block_network=False: the
+                # child ran with a proxy-stripped safe env and dialed
+                # ghcr.io directly, which mandatory-egress-proxy
+                # hosts block — the IRIS pack install failed on every
+                # fresh checkout there. use_egress_proxy sets the
+                # lowercase https_proxy CodeQL's Java stack honours,
+                # and the proxy chains to the operator's upstream.
+                from packages.codeql.codeql_proxy_hosts import (
+                    proxy_hosts_for_codeql,
+                )
                 install_proc = sandbox_run(
                     [self.codeql_cli, "pack", "install", str(pack_dir)],
-                    block_network=False,  # may need to fetch dep packs first time
+                    use_egress_proxy=True,
+                    proxy_hosts=proxy_hosts_for_codeql(self.codeql_cli),
+                    caller_label="codeql-pack-install",
                     tool_paths=self._sandbox_tool_paths(),
                     audit_run_dir=str(out_dir),
                     capture_output=True, text=True,

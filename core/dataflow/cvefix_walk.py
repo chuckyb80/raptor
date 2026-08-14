@@ -205,10 +205,15 @@ class WalkResult:
 
 def _run(cmd, timeout) -> bool:
     # get_safe_env() strips env vars tools may shell-evaluate (untrusted-repo
-    # hygiene per CLAUDE.md); buildless extraction + git read-only ops only.
+    # hygiene per CLAUDE.md); buildless extraction + git ops only.
+    # preserve_proxy: _fetch_pair routes `git fetch` at the REMOTE
+    # origin through here — git honours proxy env, and without it
+    # mandatory-egress-proxy hosts have no route. Harmless for the
+    # local-only invocations (git never dials out for those).
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           check=False, env=RaptorConfig.get_safe_env())
+                           check=False,
+                           env=RaptorConfig.get_safe_env(preserve_proxy=True))
         return r.returncode == 0
     except (subprocess.TimeoutExpired, OSError):
         return False

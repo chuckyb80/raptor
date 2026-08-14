@@ -157,7 +157,10 @@ def _resolve_parent(repo_url: str, fix_hash: str, timeout: int = 60) -> Optional
         td_p = Path(td)
         from core.config import RaptorConfig
         from core.sandbox.preexec import set_pdeathsig
-        _env = RaptorConfig.get_safe_env()
+        # preserve_proxy: the fetch below dials the REMOTE repo_url —
+        # git honours proxy env, and on mandatory-egress-proxy hosts
+        # there is no direct route.
+        _env = RaptorConfig.get_safe_env(preserve_proxy=True)
         _pds = set_pdeathsig()
         try:
             subprocess.run(["git", "init", "-q", str(td_p)],

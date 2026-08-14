@@ -265,7 +265,8 @@ def _scan_one(
             ),
             check=True, capture_output=True, text=True,
             timeout=git_clone_timeout,
-            env=RaptorConfig.get_safe_env(),
+            # preserve_proxy: remote clone — git honours proxy env.
+            env=RaptorConfig.get_safe_env(preserve_proxy=True),
             preexec_fn=set_pdeathsig(),
         )
     except (subprocess.TimeoutExpired,

@@ -207,7 +207,9 @@ def _resolve_sha(
         proc = subprocess.run(
             cmd,
             capture_output=True, text=True, timeout=20,
-            env=RaptorConfig.get_safe_env(),
+            # preserve_proxy: ls-remote dials the forge — git honours
+            # proxy env; no direct route on mandatory-proxy hosts.
+            env=RaptorConfig.get_safe_env(preserve_proxy=True),
             preexec_fn=set_pdeathsig(),
         )
     except (subprocess.SubprocessError, OSError) as e:

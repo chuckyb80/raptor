@@ -167,7 +167,13 @@ def run_rule(
 
         if env is None:
             from core.config import RaptorConfig
-            env = RaptorConfig.get_safe_env()
+            # Registry configs (p/..., category/...) are fetched from
+            # semgrep.dev at run time — semgrep honours proxy env, so
+            # the operator's proxy must survive for those or every
+            # registry scan fails behind a mandatory egress proxy.
+            # Local rule paths keep the stricter default.
+            _needs_registry = str(config).startswith(("p/", "category/"))
+            env = RaptorConfig.get_safe_env(preserve_proxy=_needs_registry)
 
         runner = subprocess_runner or subprocess.run
 

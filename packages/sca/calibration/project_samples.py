@@ -792,7 +792,9 @@ def _collect_one(
         from core.config import RaptorConfig
         from core.git.clone import safe_git_command
         from core.sandbox.preexec import set_pdeathsig
-        _env = RaptorConfig.get_safe_env()
+        # preserve_proxy: clone/fetch dial the remote — git honours
+        # proxy env; no direct route on mandatory-proxy hosts.
+        _env = RaptorConfig.get_safe_env(preserve_proxy=True)
         _pre = set_pdeathsig()
         try:
             if _is_sha:

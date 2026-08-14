@@ -231,7 +231,10 @@ class CodeQLAdapter(ToolAdapter):
 
         if env is None:
             from core.config import RaptorConfig
-            env = RaptorConfig.get_safe_env()
+            # preserve_proxy: the lazy `codeql pack install` on this
+            # path fetches dep packs from the registry; CodeQL's Java
+            # stack honours the lowercase https_proxy env var.
+            env = RaptorConfig.get_safe_env(preserve_proxy=True)
 
         # `output=` grants write access to the database directory.
         # CodeQL writes to `<db>/<lang>/default/cache/` (the IMB
@@ -346,7 +349,10 @@ class CodeQLAdapter(ToolAdapter):
 
         if env is None:
             from core.config import RaptorConfig
-            env = RaptorConfig.get_safe_env()
+            # preserve_proxy: the lazy `codeql pack install` on this
+            # path fetches dep packs from the registry; CodeQL's Java
+            # stack honours the lowercase https_proxy env var.
+            env = RaptorConfig.get_safe_env(preserve_proxy=True)
 
         runner = (
             make_sandbox_runner(
@@ -506,7 +512,10 @@ class CodeQLAdapter(ToolAdapter):
 
         if env is None:
             from core.config import RaptorConfig
-            env = RaptorConfig.get_safe_env()
+            # preserve_proxy: the lazy `codeql pack install` on this
+            # path fetches dep packs from the registry; CodeQL's Java
+            # stack honours the lowercase https_proxy env var.
+            env = RaptorConfig.get_safe_env(preserve_proxy=True)
 
         # codeql wants the .ql in a query pack alongside a qlpack.yml.
         # Generate both in a temp dir, then `codeql pack install` so that
