@@ -36,11 +36,14 @@ from .call_graph import (
     extract_call_graph_go,
     extract_call_graph_java,
     extract_call_graph_javascript,
+    extract_call_graph_kotlin,
     extract_call_graph_lua,
     extract_call_graph_php,
     extract_call_graph_python,
     extract_call_graph_ruby,
     extract_call_graph_rust,
+    extract_call_graph_scala,
+    extract_call_graph_swift,
 )
 from .diff import compare_inventories
 from core.build.macro_config import extract_build_tus, extract_macro_config
@@ -905,6 +908,18 @@ def _process_single_file(
             ).to_dict()
         elif language == 'lua':
             record['call_graph'] = extract_call_graph_lua(
+                parse_text,
+            ).to_dict()
+        elif language == 'scala':
+            record['call_graph'] = extract_call_graph_scala(
+                parse_text,
+            ).to_dict()
+        elif language == 'kotlin':
+            record['call_graph'] = extract_call_graph_kotlin(
+                parse_text,
+            ).to_dict()
+        elif language == 'swift':
+            record['call_graph'] = extract_call_graph_swift(
                 parse_text,
             ).to_dict()
         elif language == 'c':

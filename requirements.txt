@@ -43,12 +43,14 @@ instructor==1.15.4
 # tree-sitter-go==0.25.0
 # tree-sitter-java==0.23.5
 # tree-sitter-javascript==0.25.0
+# tree-sitter-kotlin==1.1.0
 # tree-sitter-lua==0.5.0
 # tree-sitter-php==0.24.1
 # tree-sitter-python==0.25.0
 # tree-sitter-ruby==0.23.1
 # tree-sitter-rust==0.24.2
 # tree-sitter-scala==0.26.0
+# tree-sitter-swift==0.7.3
 # tree-sitter-typescript==0.23.2
 
 # Optional: For enhanced dataflow visualization (recommended)

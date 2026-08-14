@@ -1262,6 +1262,10 @@ def _ts_language(lang: str):
             # partial inventory on its Scala half only. Same failure
             # shape as the cpp and typescript branches above.
             import tree_sitter_scala as ts
+        elif lang == "kotlin":
+            import tree_sitter_kotlin as ts
+        elif lang == "swift":
+            import tree_sitter_swift as ts
         else:
             return None
         return Language(ts.language())
@@ -1325,6 +1329,17 @@ class TreeSitterExtractor:
         # ``function_declaration`` and is intentionally excluded (no
         # code to review), matching the Rust rule above.
         "scala": ("function_definition",),
+        # Kotlin: ``fun`` bodies + secondary constructors. Abstract /
+        # interface ``fun`` without a body still parses as
+        # function_declaration but carries no function_body — kept, since
+        # unlike Rust/Scala the node type doesn't distinguish and callers
+        # tolerate line_start==line_end signatures.
+        "kotlin": ("function_declaration", "secondary_constructor"),
+        # Swift: ``func`` + ``init``/``deinit``. Protocol requirement
+        # signatures are ``protocol_function_declaration`` — excluded
+        # (no body), matching the Rust/Scala signature rule.
+        "swift": ("function_declaration", "init_declaration",
+                  "deinit_declaration"),
     }
 
     _CLASS_TYPES = {
@@ -1350,6 +1365,15 @@ class TreeSitterExtractor:
         # singleton/companion helpers live, which is a lot of a typical
         # Scala service's logic.
         "scala": ("class_definition", "object_definition", "trait_definition"),
+        # Kotlin: class_declaration covers class/interface/enum (the
+        # grammar reuses one node type); object_declaration is the
+        # singleton/companion host.
+        "kotlin": ("class_declaration", "object_declaration"),
+        # Swift: class_declaration covers class/struct/enum/extension
+        # (one node type, keyword child differs); protocols host
+        # default implementations via extensions but the declaration
+        # itself is tracked for hierarchy.
+        "swift": ("class_declaration", "protocol_declaration"),
     }
 
     def __init__(self, language: str):
@@ -1960,6 +1984,24 @@ class TreeSitterExtractor:
         # ``type_identifier`` names a TS class/interface — but in a Java/TS
         # method it's the RETURN TYPE (``public String handle()``), which
         # precedes the method name, so only accept it on a class declaration.
+        # Swift: init/deinit carry no name identifier — synthesise.
+        if self.language == "swift" and node.type == "init_declaration":
+            return "init"
+        if self.language == "swift" and node.type == "deinit_declaration":
+            return "deinit"
+        # Swift: ``extension C`` wraps the target in user_type →
+        # type_identifier (one level down, unlike a direct class name).
+        if self.language == "swift" and node.type == "class_declaration":
+            ut = next((c for c in node.children if c.type == "user_type"), None)
+            if ut is not None:
+                ti = next((g for g in ut.children
+                           if g.type == "type_identifier"), None)
+                if ti is not None:
+                    return ti.text.decode()
+        # Kotlin: secondary constructors carry no name — use the
+        # conventional "constructor".
+        if self.language == "kotlin" and node.type == "secondary_constructor":
+            return "constructor"
         is_class_decl = node.type in (
             "class_declaration", "abstract_class_declaration",
             "interface_declaration",
@@ -1970,6 +2012,8 @@ class TreeSitterExtractor:
             # this the name didn't resolve and inline methods read
             # class_name=None (no CHA / framework / qualname association).
             "class_specifier", "struct_specifier",
+            # Swift: protocol name is a type_identifier child.
+            "protocol_declaration",
         )
         for child in node.children:
             if child.type in ("identifier", "name"):
@@ -1990,6 +2034,11 @@ class TreeSitterExtractor:
             # otherwise ES private methods were dropped entirely.
             if child.type in ("property_identifier",
                               "private_property_identifier"):
+                return child.text.decode()
+            # Swift: function/method names are simple_identifier (no
+            # other supported grammar emits that type, so it is safe in
+            # the generic loop).
+            if child.type == "simple_identifier":
                 return child.text.decode()
             if child.type == "type_identifier" and is_class_decl:
                 return child.text.decode()
@@ -2183,7 +2232,8 @@ class TreeSitterExtractor:
 # startup banner's grammar list; keep in sync with that branch.
 _TS_PROBE_LANGUAGES = (
     "python", "java", "javascript", "typescript", "tsx", "c", "cpp",
-    "go", "rust", "csharp", "ruby", "php", "lua", "scala",
+    "go", "rust", "csharp", "ruby", "php", "lua", "scala", "kotlin",
+    "swift",
 )
 
 _cached_ts_languages: Optional[List[str]] = None
@@ -2862,7 +2912,7 @@ def _collect_comment_lines(node, comment_lines: set, code_lines: set = None) -> 
     stack = [node]
     while stack:
         n = stack.pop()
-        if n.type in ("comment", "line_comment", "block_comment"):
+        if n.type in ("comment", "line_comment", "block_comment", "multiline_comment"):
             for line in range(n.start_point[0], n.end_point[0] + 1):
                 if line not in code_lines:
                     comment_lines.add(line)
@@ -2877,7 +2927,7 @@ def _collect_code_lines(node, code_lines: set) -> None:
     stack = [node]
     while stack:
         n = stack.pop()
-        if (n.type not in ("comment", "line_comment", "block_comment")
+        if (n.type not in ("comment", "line_comment", "block_comment", "multiline_comment")
                 and not n.children):
             # Leaf node that isn't a comment — it's code
             if n.text and n.text.strip():
