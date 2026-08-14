@@ -133,11 +133,39 @@ def _drop_unreachable_registry_packs(
     ]
     if not needs_network:
         return configs
+    import os
     import socket
+    from urllib.parse import urlsplit
+    # Probe the FIRST HOP semgrep will actually use. On
+    # mandatory-egress-proxy hosts a direct TCP connect to
+    # semgrep.dev:443 always fails even though semgrep (which honours
+    # proxy env) can fetch registry packs fine — pre-fix that
+    # misclassified every proxied host as airgapped and silently
+    # dropped all registry packs. When a proxy is configured for
+    # https (and semgrep.dev isn't no_proxy'd), reachability of the
+    # proxy itself is the meaningful signal.
+    probe_host, probe_port = "semgrep.dev", 443
+    proxy_url = (
+        os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("all_proxy") or os.environ.get("ALL_PROXY")
+    )
+    if proxy_url:
+        from core.http.urllib_backend import _host_in_no_proxy
+        raw_no = os.environ.get("no_proxy") or os.environ.get("NO_PROXY") or ""
+        no_proxy = tuple(e.strip() for e in raw_no.split(",") if e.strip())
+        if not _host_in_no_proxy("semgrep.dev", no_proxy):
+            parsed = urlsplit(
+                proxy_url if "://" in proxy_url else f"http://{proxy_url}"
+            )
+            if parsed.hostname:
+                probe_host = parsed.hostname
+                probe_port = parsed.port or (
+                    443 if parsed.scheme == "https" else 80
+                )
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(3)
     try:
-        sock.connect(("semgrep.dev", 443))
+        sock.connect((probe_host, probe_port))
         return configs
     except (OSError, socket.timeout):
         dropped = [n for n, _ in needs_network]

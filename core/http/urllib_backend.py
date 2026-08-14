@@ -17,6 +17,18 @@ Why urllib3 not stdlib urllib:
     bundle and is configured CERT_REQUIRED + hostname-verified by
     default in 2.x.
 
+Operator proxy env: when constructed WITHOUT an injected pool
+manager, UrllibClient snapshots ``https_proxy`` / ``http_proxy`` /
+``all_proxy`` (+ ``no_proxy``) at construction time and routes
+requests through the operator's proxy — mandatory-egress-proxy hosts
+otherwise have no route at all for the direct client (urllib3 never
+reads env at request time). This does NOT weaken the EgressClient
+chokepoint: EgressClient injects its own ``ProxyManager`` via
+``_http``, which disables the env snapshot entirely, so ``no_proxy``
+still cannot bypass the chokepoint. The snapshot is
+construction-time, matching the sandbox egress proxy's
+capture-once semantics.
+
 Honours Retry-After on 429/503; exponential backoff on other transient
 errors; bounded total retry duration; size caps on responses; gzip
 decompression of responses that arrive compressed even when not
@@ -160,6 +172,95 @@ def _new_pool_manager() -> urllib3.PoolManager:
     )
 
 
+def _env_proxy_settings() -> tuple[dict[str, str], tuple[str, ...]]:
+    """Snapshot proxy env for the direct client.
+
+    Returns ``({scheme: proxy_url}, no_proxy_entries)``. Lowercase
+    names win (matching curl/requests precedence), ``all_proxy`` is
+    the per-scheme fallback. Empty mapping when no proxy configured.
+    """
+    import os
+
+    def _get(*names: str) -> str | None:
+        for n in names:
+            v = os.environ.get(n)
+            if v:
+                return v
+        return None
+
+    fallback = _get("all_proxy", "ALL_PROXY")
+    mapping: dict[str, str] = {}
+    https_p = _get("https_proxy", "HTTPS_PROXY") or fallback
+    http_p = _get("http_proxy", "HTTP_PROXY") or fallback
+    if https_p:
+        mapping["https"] = https_p
+    if http_p:
+        mapping["http"] = http_p
+    raw = _get("no_proxy", "NO_PROXY") or ""
+    entries = tuple(e.strip() for e in raw.split(",") if e.strip())
+    return mapping, entries
+
+
+def _host_in_no_proxy(host: str, entries: tuple[str, ...]) -> bool:
+    """Suffix-match ``host`` against no_proxy entries.
+
+    Standard semantics: ``*`` matches everything; entries match the
+    exact host or any subdomain (leading dots optional); a ``:port``
+    suffix on an entry is ignored (we match on host only).
+    """
+    host = host.lower().rstrip(".")
+    for entry in entries:
+        e = entry.lower()
+        if e == "*":
+            return True
+        # Strip a :port suffix — but not an IPv6 colon. no_proxy
+        # entries with bracketed IPv6 are rare; handle the common
+        # host[:port] shape and leave bare IPv6 entries intact.
+        if e.count(":") == 1:
+            e = e.split(":", 1)[0]
+        e = e.lstrip(".")
+        if not e:
+            continue
+        if host == e or host.endswith("." + e):
+            return True
+    return False
+
+
+def _new_proxy_manager(proxy_url: str) -> urllib3.ProxyManager:
+    """ProxyManager with the same secure defaults as the direct pool.
+
+    Basic-auth userinfo in the proxy URL (``http://user:pass@corp:8080``)
+    is extracted into ``Proxy-Authorization`` headers — urllib3 does
+    not parse it from the URL itself.
+    """
+    try:
+        import certifi
+        ca_certs = certifi.where()
+    except ImportError:
+        ca_certs = None
+    parsed = _urlparse.urlsplit(proxy_url)
+    proxy_headers = None
+    if parsed.username is not None:
+        auth = parsed.username
+        if parsed.password is not None:
+            auth = f"{parsed.username}:{parsed.password}"
+        proxy_headers = urllib3.make_headers(proxy_basic_auth=auth)
+        netloc = parsed.hostname or ""
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        proxy_url = _urlparse.urlunsplit(
+            (parsed.scheme, netloc, parsed.path, parsed.query,
+             parsed.fragment)
+        )
+    return urllib3.ProxyManager(
+        proxy_url,
+        retries=False, cert_reqs="CERT_REQUIRED",
+        ca_certs=ca_certs,
+        maxsize=_DEFAULT_POOL_MAXSIZE,
+        proxy_headers=proxy_headers,
+    )
+
+
 class _HostCircuitBreaker:
     """Per-(host, port) rate-limit circuit breaker.
 
@@ -298,9 +399,26 @@ class UrllibClient:
         circuit_breaker: Optional[_HostCircuitBreaker] = None,
     ) -> None:
         self._ua = user_agent
-        # Subclass / test hook. Lazy default avoids spinning up a pool
-        # manager (and its certifi load) when the client is never used.
-        self._http = _http or _new_pool_manager()
+        # Subclass / test hook. An injected pool manager (EgressClient's
+        # chokepoint ProxyManager, test doubles) is used exclusively —
+        # the operator-proxy env snapshot below is then disabled, so
+        # no_proxy can never bypass the chokepoint.
+        if _http is not None:
+            self._http = _http
+            self._proxy_pools: dict[str, urllib3.ProxyManager] = {}
+            self._no_proxy: tuple[str, ...] = ()
+        else:
+            self._http = _new_pool_manager()
+            proxy_map, no_proxy = _env_proxy_settings()
+            # One ProxyManager per distinct proxy URL (http and https
+            # usually share one) — schemes map onto the shared pool.
+            by_url: dict[str, urllib3.ProxyManager] = {}
+            self._proxy_pools = {}
+            for scheme, purl in proxy_map.items():
+                if purl not in by_url:
+                    by_url[purl] = _new_proxy_manager(purl)
+                self._proxy_pools[scheme] = by_url[purl]
+            self._no_proxy = no_proxy
         # Per-host rate-limit circuit breaker. Defaults to a module-
         # level singleton so state persists ACROSS HttpClient
         # instances within one process — important for sweep-style
@@ -330,6 +448,22 @@ class UrllibClient:
     # legitimate use (typical OAuth callback URLs with state +
     # PKCE are ~1.5 KB) and well below the smallest infra cap.
     _MAX_URL_BYTES = 64 * 1024
+
+    def _pool_for(self, url: str) -> urllib3.PoolManager:
+        """Pick the pool for ``url``: the operator-proxy pool when one
+        was detected at construction and the host isn't no_proxy'd,
+        else the direct pool (which is also the injected pool for
+        EgressClient — see ``__init__``)."""
+        if not self._proxy_pools:
+            return self._http
+        parsed = _urlparse.urlsplit(url)
+        pool = self._proxy_pools.get(parsed.scheme)
+        if pool is None:
+            return self._http
+        host = (parsed.hostname or "").lower()
+        if host and _host_in_no_proxy(host, self._no_proxy):
+            return self._http
+        return pool
 
     def _validate_url(self, url: str) -> _urlparse.SplitResult:
         """Reject URLs that don't match (allowed-scheme)://host/...
@@ -605,7 +739,7 @@ class UrllibClient:
         max_bytes: int,
         wallclock_cap: int = None,
     ) -> Iterator[bytes]:
-        resp = self._http.request(
+        resp = self._pool_for(url).request(
             "GET", url,
             headers=headers,
             timeout=urllib3.Timeout(total=float(timeout)),
@@ -931,7 +1065,7 @@ class UrllibClient:
         # useful for security scanning patterns that need to see
         # Location headers without chasing them.
         is_head = method.upper() == "HEAD"
-        resp = self._http.request(
+        resp = self._pool_for(url).request(
             method, url,
             body=body,
             headers=headers,

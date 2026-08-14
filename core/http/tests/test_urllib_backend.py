@@ -21,7 +21,8 @@ from core.http import (
     default_client,
 )
 from core.http.urllib_backend import (
-    UrllibClient, _HostCircuitBreaker,
+    UrllibClient,
+    _HostCircuitBreaker,
     reset_default_circuit_breaker,
 )
 
@@ -141,7 +142,7 @@ class TestConnectionPooling:
         """The default pool manager is constructed with maxsize > 1
         so concurrent calls to the same host don't serialise on a
         single connection."""
-        from core.http.urllib_backend import _new_pool_manager, _DEFAULT_POOL_MAXSIZE
+        from core.http.urllib_backend import _DEFAULT_POOL_MAXSIZE, _new_pool_manager
         pool = _new_pool_manager()
         # urllib3 stores maxsize on connection_pool_kw.
         assert pool.connection_pool_kw.get("maxsize") == _DEFAULT_POOL_MAXSIZE
@@ -1209,3 +1210,91 @@ def test_circuit_break_attribute_on_mid_retry_abort(_mock_sleep):
             total_timeout=60, retries=2,
         )
     assert exc_info.value.circuit_break is True
+
+
+class TestOperatorProxyEnv:
+    """UrllibClient must honour the operator's proxy env when no pool
+    manager is injected — mandatory-egress-proxy hosts have no direct
+    route. Injected pools (EgressClient's chokepoint) disable the
+    snapshot so no_proxy can never bypass the chokepoint."""
+
+    def test_no_proxy_env_uses_direct_pool(self, monkeypatch):
+        from core.http.urllib_backend import UrllibClient
+        for var in ("http_proxy", "https_proxy", "all_proxy",
+                    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+            monkeypatch.delenv(var, raising=False)
+        client = UrllibClient()
+        assert client._proxy_pools == {}
+        assert client._pool_for("https://api.osv.dev/v1") is client._http
+
+    def test_proxy_env_routes_via_proxy_manager(self, monkeypatch):
+        import urllib3 as _u3
+
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+        monkeypatch.setenv("http_proxy", "http://proxy.corp:3128")
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        client = UrllibClient()
+        pool = client._pool_for("https://api.osv.dev/v1")
+        assert isinstance(pool, _u3.ProxyManager)
+        assert pool.proxy.host == "proxy.corp"
+        assert pool.proxy.port == 3128
+        # http and https share one manager when the URL is identical
+        assert client._pool_for("http://example.com/") is pool
+
+    def test_no_proxy_entries_bypass_proxy(self, monkeypatch):
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+        monkeypatch.setenv("no_proxy", "169.254.169.254,internal.corp")
+        client = UrllibClient()
+        assert client._pool_for("https://internal.corp/x") is client._http
+        assert client._pool_for("https://sub.internal.corp/x") is client._http
+        assert client._pool_for("https://api.osv.dev/v1") is not client._http
+
+    def test_all_proxy_fallback(self, monkeypatch):
+        import urllib3 as _u3
+
+        from core.http.urllib_backend import UrllibClient
+        for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("all_proxy", "http://proxy.corp:3128")
+        client = UrllibClient()
+        assert isinstance(
+            client._pool_for("https://api.osv.dev/v1"), _u3.ProxyManager,
+        )
+
+    def test_injected_pool_disables_env_snapshot(self, monkeypatch):
+        """EgressClient regression guard: an injected pool is used
+        exclusively — env proxy vars must not reroute it and no_proxy
+        must not bypass it."""
+        from unittest.mock import MagicMock
+
+        from core.http.urllib_backend import UrllibClient
+        monkeypatch.setenv("https_proxy", "http://proxy.corp:3128")
+        monkeypatch.setenv("no_proxy", "*")
+        injected = MagicMock()
+        client = UrllibClient(_http=injected)
+        assert client._pool_for("https://api.osv.dev/v1") is injected
+
+    def test_proxy_url_basic_auth_extracted(self, monkeypatch):
+        from core.http.urllib_backend import _new_proxy_manager
+        pm = _new_proxy_manager("http://user:secret@proxy.corp:3128")
+        assert pm.proxy.host == "proxy.corp"
+        assert pm.proxy.port == 3128
+        assert pm.proxy_headers.get("proxy-authorization", "").startswith(
+            "Basic ",
+        )
+
+
+class TestHostInNoProxy:
+    def test_matching(self):
+        from core.http.urllib_backend import _host_in_no_proxy
+        assert _host_in_no_proxy("anything.example", ("*",))
+        assert _host_in_no_proxy("example.com", ("example.com",))
+        assert _host_in_no_proxy("a.example.com", ("example.com",))
+        assert _host_in_no_proxy("a.example.com", (".example.com",))
+        assert _host_in_no_proxy("example.com", ("example.com:443",))
+        assert not _host_in_no_proxy("notexample.com", ("example.com",))
+        assert not _host_in_no_proxy("example.com", ())
+        assert _host_in_no_proxy("169.254.169.254", ("169.254.169.254",))
